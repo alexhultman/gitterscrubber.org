@@ -8,24 +8,43 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"strconv"
 )
 
-// your Gitter oauth key
-const key string = ""
+const (
+	// your Gitter oauth key
+	key = ""
+	// your Gitter oauth secret
+	secret = ""
+	// your Gitter redirect aka the address of this server
+	redirect = ""
+	// port of this server
+	port = 3000
+	// scrub priavet 1 to 1 rooms also?
+	scrubOneToOnes = true
+)
 
-// your Gitter oauth secret
-const secret string = ""
+// Room is a Gitter room
+type Room struct {
+	Name     string
+	OneToOne bool
+	ID       string
+}
 
-// your Gitter redirect aka the address of this server
-const redirect string = ""
+// User is a Gitter user
+type User struct {
+	ID          string
+	DisplayName string
+}
 
-// port of this server
-const port int = 3000
+// Message is a Gitter message
+type Message struct {
+	Sent     string
+	ID       string
+	FromUser User
+	Text     string
+}
 
-const scrubOneToOnes = true
-
-func getAccessToken(code string, cb func(token string)) {
+func getAccessToken(code string) string {
 
 	values := map[string]string{
 		"client_id":     key,
@@ -38,166 +57,109 @@ func getAccessToken(code string, cb func(token string)) {
 
 	resp, err := http.Post("https://gitter.im/login/oauth/token", "application/json", bytes.NewBuffer(jsonValue))
 
+	if err != nil {
+
+	}
+
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
 
 	if err == nil {
 		var tmp map[string]string
 		json.Unmarshal(body, &tmp)
-		cb(tmp["access_token"])
-	} else {
-		fmt.Println("Error: getAccessToken")
+		return tmp["access_token"]
 	}
+	fmt.Println("Error: getAccessToken")
+	return ""
 }
 
-func getUser(token string, cb func(userId string, userName string)) {
-	client := &http.Client{}
-	request, _ := http.NewRequest("GET", "https://api.gitter.im/v1/user/me", nil)
+func gitterRequest(method string, expectedStatusCode int, url, token string) ([]byte, error) {
+	client := http.Client{}
+	request, _ := http.NewRequest(method, url, nil)
 	request.Header.Add("authorization", ("Bearer " + token))
-	resp, _ := client.Do(request)
+	resp, err := client.Do(request)
+
+	if err != nil {
+		fmt.Println("Error: gitterRequest")
+		return []byte{}, err
+	}
 
 	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
 
-	if err == nil {
-		var tmp map[string]string
-		json.Unmarshal(body, &tmp)
-		cb(tmp["id"], tmp["displayName"])
-	} else {
+	if resp.StatusCode != expectedStatusCode {
+		fmt.Println("Error: gitterRequest (" + resp.Status + ")")
+		//time.Sleep(500 * time.Millisecond)
+		//return gitterRequest(method, expectedStatusCode, url, token)
+	}
+
+	return ioutil.ReadAll(resp.Body)
+}
+
+func getUser(token string) (string, string) {
+	body, err := gitterRequest("GET", 200, "https://api.gitter.im/v1/user/me", token)
+
+	if err != nil {
 		fmt.Println("Error: getUser")
+		return "", ""
 	}
+
+	var user User
+	json.Unmarshal(body, &user)
+	return user.ID, user.DisplayName
 }
 
-// Room asasd
-type Room struct {
-	Name     string
-	OneToOne bool
-	ID       string
-}
-
-func getPublicRooms(token string, cb func(rooms []Room)) {
-	client := &http.Client{}
-	request, _ := http.NewRequest("GET", "https://api.gitter.im/v1/user/me/rooms", nil)
-	request.Header.Add("authorization", ("Bearer " + token))
-	resp, _ := client.Do(request)
-
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
+func getPublicRooms(token string) []Room {
+	body, err := gitterRequest("GET", 200, "https://api.gitter.im/v1/user/me/rooms", token)
 
 	if err == nil {
-		var tmp []Room
-		json.Unmarshal(body, &tmp)
-		cb(tmp)
-	} else {
-		fmt.Println("Error: getPublicRooms")
+		var rooms []Room
+		json.Unmarshal(body, &rooms)
+		return rooms
 	}
+	fmt.Println("Error: getPublicRooms")
+	return []Room{}
 }
 
-// User has ID
-type User struct {
-	ID string
-}
-
-// Message asdadasasd
-type Message struct {
-	Sent     string
-	ID       string
-	FromUser User
-	Text     string
-}
-
-func fetchMessages(token string, roomID string, beforeID string, cb func(messages []Message)) {
+func fetchMessages(token string, roomID string, beforeID string) []Message {
 
 	if len(beforeID) > 0 {
 		beforeID = "&beforeId=" + beforeID
 	}
 
-	client := &http.Client{}
-	request, _ := http.NewRequest("GET", ("https://api.gitter.im/v1/rooms/" + roomID + "/chatMessages?limit=100" + beforeID), nil)
-	request.Header.Add("authorization", ("Bearer " + token))
-	resp, _ := client.Do(request)
+	body, err := gitterRequest("GET", 200, ("https://api.gitter.im/v1/rooms/" + roomID + "/chatMessages?limit=100" + beforeID), token)
 
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-
+	var messages []Message
 	if err == nil {
-		var tmp []Message
-		json.Unmarshal(body, &tmp)
-		cb(tmp)
-	} else {
-		fmt.Println("Error: fetchMessages")
+		json.Unmarshal(body, &messages)
 	}
+	return messages
 }
 
-func deleteMessage(token string, roomID string, messageID string, cb func()) {
-	client := &http.Client{}
-	request, _ := http.NewRequest("DELETE", ("https://api.gitter.im/v1/rooms/" + roomID + "/chatMessages/" + messageID), nil)
-	request.Header.Add("authorization", ("Bearer " + token))
-	resp, _ := client.Do(request)
-
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-
-	if resp.StatusCode != 204 {
-		fmt.Println("Failed to delete, retrying in a while!")
-		// insert time out here
-	}
-
-	if err == nil {
-		var tmp []Message
-		json.Unmarshal(body, &tmp)
-		cb()
-	} else {
-		fmt.Println("Error: deleteMessage")
-	}
-}
-
-func deleteMyMessages(token string, userID string, roomID string, messages []Message, index int, cb func()) {
+func deleteMyMessages(token string, userID string, roomID string, messages []Message, index int) {
 	if index == len(messages) {
-		cb()
 		return
 	}
 	if messages[index].FromUser.ID == userID {
-		deleteMessage(token, roomID, messages[index].ID, func() {
-			fmt.Println("Deleted message: " + messages[index].Text)
-			deleteMyMessages(token, userID, roomID, messages, (index + 1), cb)
-		})
-	} else {
-		deleteMyMessages(token, userID, roomID, messages, (index + 1), cb)
-	}
-}
-
-func readAllMessages(token string, userID string, roomID string, beforeID string, cb func()) {
-	fetchMessages(token, roomID, beforeID, func(messages []Message) {
-		if len(messages) > 0 {
-			fmt.Println("Meddelanden: " + strconv.Itoa(len(messages)) + " Första datum: " + messages[0].Sent)
+		body, err := gitterRequest("DELETE", 204, ("https://api.gitter.im/v1/rooms/" + roomID + "/chatMessages/" + messages[index].ID), token)
+		if err == nil {
+			var tmp []Message
+			json.Unmarshal(body, &tmp)
+			return
 		}
-
-		deleteMyMessages(token, userID, roomID, messages, 0, func() {
-			if len(messages) > 0 {
-				readAllMessages(token, userID, roomID, messages[0].ID, cb)
-			} else {
-				fmt.Println("Reached the end of this room, calling back!")
-				cb()
-			}
-		})
-
-	})
+		fmt.Println("Deleted message: " + messages[index].Text)
+	}
+	deleteMyMessages(token, userID, roomID, messages, (index + 1))
 }
 
-func clearRooms(token string, userID string, rooms []Room, index int) {
-	if index == len(rooms) {
+// top most function for scrubbing a room
+func scrubRoom(token string, userID string, roomID string, beforeID string) {
+	// zero messages means out of messages, or error
+	messages := fetchMessages(token, roomID, beforeID)
+	deleteMyMessages(token, userID, roomID, messages, 0)
+	if len(messages) == 0 {
 		return
 	}
-
-	if !scrubOneToOnes && rooms[index].OneToOne {
-		clearRooms(token, userID, rooms, (index + 1))
-	} else {
-		fmt.Println("Scrubbing all messages in room: " + rooms[index].Name)
-		readAllMessages(token, userID, rooms[index].ID, "", func() {
-			clearRooms(token, userID, rooms, (index + 1))
-		})
-	}
+	scrubRoom(token, userID, roomID, messages[0].ID)
 }
 
 func main() {
@@ -212,27 +174,32 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		code := r.URL.Query().Get("code")
 		if len(code) == 40 {
-			getAccessToken(code, func(token string) {
-				getUser(token, func(userId string, userName string) {
-					fmt.Println("[Scrubbing user: " + userName + "]")
-					getPublicRooms(token, func(rooms []Room) {
-						response := "<h1>gitterscrubber.org</h1>"
-						response += "You are logged in as: <b>" + userName + "</b>"
-						response += "<h3>Deleting your messages in public rooms:</h3>"
+			token := getAccessToken(code)
+			userID, userName := getUser(token)
+			fmt.Println("[Scrubbing user: " + userName + "]")
+			rooms := getPublicRooms(token)
 
-						for _, room := range rooms {
-							if scrubOneToOnes || !room.OneToOne {
-								response += "<b>" + room.Name + "</b><br>"
-							}
-						}
-						response += "<p>Your task has been posted. This will take a lot of time to finish. Expect at least a day of waiting.</p>"
-						fmt.Fprint(w, response)
+			response := "<h1>gitterscrubber.org</h1>"
+			response += "You are logged in as: <b>" + userName + "</b>"
+			response += "<h3>Deleting your messages in public rooms:</h3>"
 
-						// start to scrub here
-						go clearRooms(token, userId, rooms, 0)
-					})
-				})
-			})
+			for _, room := range rooms {
+				if scrubOneToOnes || !room.OneToOne {
+					response += "<b>" + room.Name + "</b><br>"
+				}
+			}
+			response += "<p>Your task has been posted. This will take a lot of time to finish. Expect at least a day of waiting.</p>"
+			fmt.Fprint(w, response)
+
+			go func() {
+				for _, room := range rooms {
+					if !(!scrubOneToOnes && room.OneToOne) {
+						fmt.Println("Scrubbing all messages in room: " + room.Name)
+						scrubRoom(token, userID, room.ID, "")
+					}
+				}
+				fmt.Println("Done scrubbing user: " + userName)
+			}()
 		}
 	})
 	fmt.Print(http.ListenAndServe("0.0.0.0:3000", nil))
